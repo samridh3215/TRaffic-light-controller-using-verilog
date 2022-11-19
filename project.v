@@ -1,116 +1,244 @@
-module traffic_light(light_highway, light_farm, C, clk, rst_n);
-parameter HGRE_FRED=2'b00, // Highway green and farm red
-   HYEL_FRED = 2'b01,// Highway yellow and farm red
-   HRED_FGRE=2'b10,// Highway red and farm green
-   HRED_FYEL=2'b11;// Highway red and farm yellow
-input C, // sensor
-   clk, // clock = 50 MHz
-   rst_n; // reset active low
-output reg[2:0] light_highway, light_farm; // output of lights
-// fpga4student.com FPGA projects, VHDL projects, Verilog projects
-reg[27:0] count=0,count_delay=0;
-reg delay10s=0, delay3s1=0,delay3s2=0,RED_count_en=0,YELLOW_count_en1=0,YELLOW_count_en2=0;
-wire clk_enable; // clock enable signal for 1s
-reg[1:0] state, next_state;
-// next state
-always @(posedge clk or negedge rst_n)
-begin
-if(~rst_n)
- state <= 2'b00;
-else 
- state <= next_state; 
-end
-// FSM
-always @(*)
-begin
-case(state)
-HGRE_FRED: begin // Green on highway and red on farm way
- RED_count_en=0;
- YELLOW_count_en1=0;
- YELLOW_count_en2=0;
- light_highway = 3'b001;
- light_farm = 3'b100;
- if(C) next_state = HYEL_FRED; 
- // if sensor detects vehicles on farm road, 
- // turn highway to yellow -> green
- else next_state =HGRE_FRED;
-end
-HYEL_FRED: begin// yellow on highway and red on farm way
-  light_highway = 3'b010;
-  light_farm = 3'b100;
-  RED_count_en=0;
- YELLOW_count_en1=1;
- YELLOW_count_en2=0;
-  if(delay3s1) next_state = HRED_FGRE;
-  // yellow for 3s, then red
-  else next_state = HYEL_FRED;
-end
-HRED_FGRE: begin// red on highway and green on farm way
- light_highway = 3'b100;
- light_farm = 3'b001;
- RED_count_en=1;
- YELLOW_count_en1=0;
- YELLOW_count_en2=0;
- if(delay10s) next_state = HRED_FYEL;
- // red in 10s then turn to yello -> green again for high way
- else next_state =HRED_FGRE;
-end
-HRED_FYEL:begin// red on highway and yellow on farm way
- light_highway = 3'b100;
- light_farm = 3'b010;
- RED_count_en=0;
- YELLOW_count_en1=0;
- YELLOW_count_en2=1;
- if(delay3s2) next_state = HGRE_FRED;
- // turn green for highway, red for farm road
- else next_state =HRED_FYEL;
-end
-default: next_state = HGRE_FRED;
-endcase
-end
-// fpga4student.com FPGA projects, VHDL projects, Verilog projects
-// create red and yellow delay counts
-always @(posedge clk)
-begin
-if(clk_enable==1) begin
- if(RED_count_en||YELLOW_count_en1||YELLOW_count_en2)
-  count_delay <=count_delay + 1;
-  if((count_delay == 9)&&RED_count_en) 
-  begin
-   delay10s=1;
-   delay3s1=0;
-   delay3s2=0;
-   count_delay<=0;
-  end
-  else if((count_delay == 2)&&YELLOW_count_en1) 
-  begin
-   delay10s=0;
-   delay3s1=1;
-   delay3s2=0;
-   count_delay<=0;
-  end
-  else if((count_delay == 2)&&YELLOW_count_en2) 
-  begin
-   delay10s=0;
-   delay3s1=0;
-   delay3s2=1;
-   count_delay<=0;
-  end
-  else
-  begin
-   delay10s=0;
-   delay3s1=0;
-   delay3s2=0;
-  end 
- end
-end
-// create 1s clock enable 
-always @(posedge clk)
-begin
- count <=count + 1;
- //if(count == 50000000) // 50,000,000 for 50 MHz clock running on real FPGA
- if(count == 3) // for testbench
-  count <= 0;
-end
- assign clk_enable = count==3 ? 1: 0; // 50,000,000 for 50MHz running on FPGA
-endmodule 
+
+// Creating module for a FIXED-TIME traffic lights contorller for a 4 way intersection:
+
+// Light change order: N, S, E, W.
+// Here green light stays on for 8 clock cycles and turns yellow for 4 clock cycles
+// and then turns red till the next time it becomes green again.
+// Lights foloow the following encoding: GREEN:001, YELOW:010, RED:100 
+
+module traffic_control(n_lights,s_lights,e_lights,w_lights,clk,rst_a);
+
+   output reg [2:0] n_lights,s_lights,e_lights,w_lights; 
+   input      clk;
+   input      rst_a;
+ 
+   reg [2:0] state;
+ 
+   // Encoding for traffic light signals:
+   parameter [2:0] north=3'b000;
+   parameter [2:0] north_y=3'b001;
+   parameter [2:0] south=3'b010;
+   parameter [2:0] south_y=3'b011;
+   parameter [2:0] east=3'b100;
+   parameter [2:0] east_y=3'b101;
+   parameter [2:0] west=3'b110;
+   parameter [2:0] west_y=3'b111;
+
+   // For counting the clock cycles:
+   reg [2:0] count;
+ 
+   always @(posedge clk, posedge rst_a)
+     begin
+
+         // On reset signal north shall have green light and counter starts from 0
+        if (rst_a)
+            begin
+                state=north;
+                count =3'b000;
+            end
+
+        else
+            begin
+                case (state)
+                north :
+                    begin
+                        // if 8 clock signals have passed switch to yellow and reset count
+                        if (count==3'b111)
+                            begin
+                            count=3'b000;
+                            state=north_y;
+                            end
+                        // otherwise increment count and stay green
+                        else
+                            begin
+                            count=count+3'b001;
+                            state=north;
+                            end
+                    end
+
+                north_y :
+                    begin
+                        // if 4 clock signals have passed switch to next green and reset count
+                        if (count==3'b011)
+                            begin
+                            count=3'b000;
+                            state=south;
+                            end
+                        // otherwise increment count and stay yellow
+                        else
+                            begin
+                            count=count+3'b001;
+                            state=north_y;
+                            end
+                    end
+
+               south :
+                    begin
+                        // if 8 clock signals have passed switch to yellow and reset count
+                        if (count==3'b111)
+                            begin
+                            count=3'b0;
+                            state=south_y;
+                            end
+                        // otherwise increment count and stay green
+                        else
+                            begin
+                            count=count+3'b001;
+                            state=south;
+                            end
+                    end
+
+            south_y :
+                begin
+                     // if 4 clock signals have passed switch to next green and reset count
+                    if (count==3'b011)
+                        begin
+                        count=3'b0;
+                        state=east;
+                        end
+                     // otherwise increment count and stay yellow
+                    else
+                        begin
+                        count=count+3'b001;
+                        state=south_y;
+                        end
+                    end
+
+            east :
+                begin
+                     // if 8 clock signals have passed switch to yellow and reset count
+                    if (count==3'b111)
+                        begin
+                        count=3'b0;
+                        state=east_y;
+                        end
+                     // otherwise increment count and stay green
+                    else
+                        begin
+                        count=count+3'b001;
+                        state=east;
+                        end
+                    end
+
+            east_y :
+                begin
+                     // if 4 clock signals have passed switch to next green and reset count
+                    if (count==3'b011)
+                        begin
+                        count=3'b0;
+                        state=west;
+                        end
+                     // otherwise increment count and stay yellow
+                    else
+                        begin
+                        count=count+3'b001;
+                        state=east_y;
+                        end
+                    end
+
+            west :
+                begin
+                     // if 8 clock signals have passed switch to yellow and reset count
+                    if (count==3'b111)
+                        begin
+                        state=west_y;
+                        count=3'b0;
+                        end
+                     // otherwise increment count and stay green
+                    else
+                        begin
+                        count=count+3'b001;
+                        state=west;
+                        end
+                    end
+
+            west_y :
+                begin
+                     // if 4 clock signals have passed switch to next green and reset count
+                    if (count==3'b011)
+                        begin
+                        state=north;
+                        count=3'b0;
+                        end
+                     // otherwise increment count and stay yellow
+                    else
+                        begin
+                        count=count+3'b001;
+                        state=west_y;
+                        end
+                    end
+            endcase // case (state)
+        end // else block
+    end // always @ (posedge clk, posedge rst_a)
+
+
+always @(state)
+     begin
+         case (state)
+            
+            north : // north G rest R
+                begin
+                    n_lights = 3'b001;
+                    s_lights = 3'b100;
+                    e_lights = 3'b100;
+                    w_lights = 3'b100;
+                end // case: north
+
+            north_y : // north Y rest R
+                begin
+                    n_lights = 3'b010;
+                    s_lights = 3'b100;
+                    e_lights = 3'b100;
+                    w_lights = 3'b100;
+                end // case: north_y
+
+            south : // south G rest R
+                begin
+                    n_lights = 3'b100;
+                    s_lights = 3'b001;
+                    e_lights = 3'b100;
+                    w_lights = 3'b100;
+                end // case: south
+
+            south_y : // south Y rest R
+                begin
+                    n_lights = 3'b100;
+                    s_lights = 3'b010;
+                    e_lights = 3'b100;
+                    w_lights = 3'b100;
+                end // case: south_y
+
+            west : // west G rest R
+                begin
+                    n_lights = 3'b100;
+                    s_lights = 3'b100;
+                    e_lights = 3'b100;
+                    w_lights = 3'b001;
+                end // case: west
+
+            west_y : // west Y rest R
+                begin
+                    n_lights = 3'b100;
+                    s_lights = 3'b100;
+                    e_lights = 3'b100;
+                    w_lights = 3'b010;
+                end // case: west_y
+
+            east : // east G rest R
+                begin
+                    n_lights = 3'b100;
+                    s_lights = 3'b100;
+                    e_lights = 3'b001;
+                    w_lights = 3'b100;
+                end // case: east
+
+            east_y : // east Y rest R
+                begin
+                    n_lights = 3'b100;
+                    s_lights = 3'b100;
+                    e_lights = 3'b010;
+                    w_lights = 3'b100;
+                end // case: east_y
+            endcase // case (state)
+     end // always @ (state)
+endmodule
